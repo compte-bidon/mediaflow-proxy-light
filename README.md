@@ -321,18 +321,41 @@ Published measurements and the reqwest-vs-Go analysis:
 
 ### Prerequisites
 
-- Rust 1.84+
-- For Windows: MinGW-w64
-- For SSL: OpenSSL development libraries
+- For building from Windows x64 for Windows x64:
+  - Download and install Rust 1.84+: https://rust-lang.org/fr/tools/install
+    - Don't install Visual Studio when prompted (select option 3: Don't install the prerequisites)
+  - Install the GNU toolchain for Windows: `rustup toolchain install stable-x86_64-pc-windows-gnu`
+  - Then, set it as your default toolchain: `rustup default stable-x86_64-pc-windows-gnu`
+  - Download GCC + LLVM/Clang/LLD/LLDB + MinGW-w64 via WinLibs: https://winlibs.com/#download-release
+    - Make sure you download a release that has GCC + LLVM/Clang/LLD/LLDB + MinGW-w64.
+    - Once downloaded, add the bin folder to your PATH environment variable
+
+- For building on Windows x64 for Linux aarch64 targets (Raspberry):
+  - Follow the same steps as building on Windows for Windows
+  - Add the GNU Raspberry target: `rustup target add aarch64-unknown-linux-gnu`
+  - Download and install the Prebuilt Windows Toolchain for Raspberry Pi (64-bit): https://gnutoolchains.com/raspberry64
+    - Once installed, add the bin folder to your PATH environment variable
 
 ### Build
+- With only hls,mpd,drm,tls-rustls features (see docs/reference/limitations.md file) (because of cross-compiling issue for boring-sys2, which depends on extractors feature)
 
-```bash
-git clone https://github.com/mhdzumair/MediaFlow-Proxy-Light
-cd mediaflow-proxy-light
-cargo build --release
-CONFIG_PATH=./config.toml ./target/release/mediaflow-proxy-light
-```
+  - From Windows x64 for Windows x64:
+    ```bash
+    git clone https://github.com/mhdzumair/MediaFlow-Proxy-Light
+    cd mediaflow-proxy-light
+    cargo build --release --target x86_64-pc-windows-gnu --no-default-features --features "hls,mpd,drm,tls-rustls"
+    ```
+
+    - The binary will be located in target/x86_64-pc-windows-gnu/release/mediaflow-proxy-light.exe
+
+  - From Windows x64 for Linux aarch64 (Raspberry):
+    ```bash
+    git clone https://github.com/mhdzumair/MediaFlow-Proxy-Light
+    cd mediaflow-proxy-light
+    cargo build --release --target aarch64-unknown-linux-gnu --config 'target.aarch64-unknown-linux-gnu.linker=\"aarch64-linux-gnu-gcc\"' --no-default-features --features "hls,mpd,drm,tls-rustls"
+    ```
+
+    - The binary will be located in target/aarch64-unknown-linux-gnu/release/mediaflow-proxy-light
 
 ### Tests & linting
 
