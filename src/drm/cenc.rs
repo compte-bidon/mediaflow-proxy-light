@@ -416,7 +416,7 @@ impl Mp4Decrypter {
                 let traf_children = Mp4Parser::children_of(&child.data);
                 let overhead: usize = traf_children
                     .iter()
-                    .filter(|a| matches!(&a.atom_type, b"senc" | b"saiz" | b"saio"))
+                    .filter(|a| matches!(&a.atom_type, b"senc" | b"saiz" | b"saio" | b"sbgp" | b"sgpd"))
                     .map(|a| a.data.len() + 8)
                     .sum();
                 self.total_encryption_overhead += overhead;
@@ -470,7 +470,7 @@ impl Mp4Decrypter {
                     sample_info = self.parse_senc(child, sample_count);
                     // senc is NOT written to new_data (stripped)
                 }
-                b"saiz" | b"saio" => { /* stripped */ }
+                b"saiz" | b"saio" | b"sbgp" | b"sgpd" => { /* stripped */ }
                 _ => new_data.extend_from_slice(&child.pack()),
             }
         }
