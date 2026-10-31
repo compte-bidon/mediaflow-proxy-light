@@ -420,6 +420,8 @@ impl Mp4Decrypter {
                     .map(|a| a.data.len() + 8)
                     .sum();
                 self.total_encryption_overhead += overhead;
+            } else if child.atom_type == *b"pssh" {
+                self.total_encryption_overhead += child.data.len() + 8;
             }
         }
 
@@ -428,7 +430,7 @@ impl Mp4Decrypter {
         for child in &children {
             if child.atom_type == *b"traf" {
                 new_data.extend_from_slice(&self.process_traf(child).pack());
-            } else {
+            } else if child.atom_type != *b"pssh" {
                 new_data.extend_from_slice(&child.pack());
             }
         }
