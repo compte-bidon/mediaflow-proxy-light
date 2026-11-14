@@ -416,7 +416,9 @@ impl Mp4Decrypter {
                 let traf_children = Mp4Parser::children_of(&child.data);
                 let overhead: usize = traf_children
                     .iter()
-                    .filter(|a| matches!(&a.atom_type, b"senc" | b"saiz" | b"saio" | b"sbgp" | b"sgpd"))
+                    .filter(|a| {
+                        matches!(&a.atom_type, b"senc" | b"saiz" | b"saio") || is_seig_group(a)
+                    })
                     .map(|a| a.data.len() + 8)
                     .sum();
                 self.total_encryption_overhead += overhead;
@@ -470,7 +472,15 @@ impl Mp4Decrypter {
                     sample_info = self.parse_senc(child, sample_count);
                     // senc is NOT written to new_data (stripped)
                 }
-                b"saiz" | b"saio" | b"sbgp" | b"sgpd" => { /* stripped */ }
+                b"saiz" | b"saio" => { /* stripped */ }
+                b"sbgp" | b"sgpd" => {
+                    if is_seig_group(child) {
+                        /* stripped — CENC sample group, no longer relevant once encrypted */
+                    } else {
+                        // keep other groupings (roll, rap , sync, tele, ...)
+                        new_data.extend_from_slice(&child.pack());
+                    }
+                }
                 _ => new_data.extend_from_slice(&child.pack()),
             }
         }
@@ -884,6 +894,21 @@ impl Mp4Decrypter {
 }
 
 // ---------------------------------------------------------------------------
+// Utility functions
+// ---------------------------------------------------------------------------
+
+/// Returns true if the atom is an sbgp or sgpd carrying the CENC "seig" grouping.
+fn is_seig_group(atom: &Mp4Atom) -> bool {
+    if atom.atom_type != *b"sbgp" && atom.atom_type != *b"sgpd" {
+        return false;
+    }
+    if atom.data.len() < 8 {
+        return false; // malformed — on garde (safe)
+    }
+    &atom.data[4..8] == b"seig"
+}
+
+// ---------------------------------------------------------------------------
 // Sample decryption (free functions)
 // ---------------------------------------------------------------------------
 
@@ -915,8 +940,7 @@ fn decrypt_sample(
 
 /// AES-CTR (cenc / cens).
 fn decrypt_sample_cenc(sample: &[u8], info: &SampleInfo, key: &[u8]) -> Vec<u8> {
-    type Aes128Ctr = ctr::Ctr128BE<aes::Aes128>;
-    type Aes256Ctr = ctr::Ctr128BE<aes::Aes256>;
+    use aes::cipher::{KeyIvInit, StreamCipher};
 
     let mut iv = [0u8; 16];
     let copy_len = info.iv.len().min(16);
@@ -928,34 +952,38 @@ fn decrypt_sample_cenc(sample: &[u8], info: &SampleInfo, key: &[u8]) -> Vec<u8> 
 
     let mut result = Vec::with_capacity(sample.len());
     let mut pos = 0usize;
-    // Create a fresh cipher for each sub-sample group (IV does not reset between subsamples)
-    let mut offset_blocks = 0u128;
 
-    for &(clear, enc) in &info.sub_samples {
-        // Copy clear bytes
-        let end = (pos + clear as usize).min(sample.len());
-        result.extend_from_slice(&sample[pos..end]);
-        pos += clear as usize;
-
-        // Decrypt encrypted bytes
-        let enc_end = (pos + enc as usize).min(sample.len());
-        let enc_data = &sample[pos..enc_end];
-
-        // AES-CTR: the block counter increments by 1 per 16-byte block
-        // We need to continue from where we left off
-        let decrypted = aes_ctr_decrypt_with_offset(key, &iv, enc_data, offset_blocks);
-        offset_blocks += (enc as u128).div_ceil(16);
-        result.extend_from_slice(&decrypted);
-        pos += enc as usize;
+    match key.len() {
+        16 => {
+            type Aes128Ctr = ctr::Ctr128BE<aes::Aes128>;
+            let mut cipher = Aes128Ctr::new_from_slices(key, &iv).unwrap();
+            for &(clear, enc) in &info.sub_samples {
+                result.extend_from_slice(&sample[pos..pos + clear as usize]);
+                pos += clear as usize;
+                let mut enc_buf = sample[pos..pos + enc as usize].to_vec();
+                cipher.apply_keystream(&mut enc_buf); // cipher state persists
+                result.extend_from_slice(&enc_buf);
+                pos += enc as usize;
+            }
+        }
+        32 => {
+            type Aes256Ctr = ctr::Ctr128BE<aes::Aes256>;
+            let mut cipher = Aes256Ctr::new_from_slices(key, &iv).unwrap();
+            for &(clear, enc) in &info.sub_samples {
+                result.extend_from_slice(&sample[pos..pos + clear as usize]);
+                pos += clear as usize;
+                let mut enc_buf = sample[pos..pos + enc as usize].to_vec();
+                cipher.apply_keystream(&mut enc_buf);
+                result.extend_from_slice(&enc_buf);
+                pos += enc as usize;
+            }
+        }
+        _ => return sample.to_vec(),
     }
-
-    // Remaining data
+    
     if pos < sample.len() {
-        let enc_data = &sample[pos..];
-        let decrypted = aes_ctr_decrypt_with_offset(key, &iv, enc_data, offset_blocks);
-        result.extend_from_slice(&decrypted);
+        result.extend_from_slice(&sample[pos..]);
     }
-
     result
 }
 
